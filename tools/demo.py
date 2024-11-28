@@ -179,9 +179,17 @@ class Predictor(object):
 
         cls = output[:, 6]
         scores = output[:, 4] * output[:, 5]
+        # Convert tensors to lists for iteration
+        cls_list = cls.tolist()
+        scores_list = scores.tolist()
 
+        # Create a dictionary mapping class names to scores
+        class_scores = {
+            COCO_CLASSES[int(cls_index)]: score 
+            for cls_index, score in zip(cls_list, scores_list)
+        }
         vis_res = vis(img, bboxes, scores, cls, cls_conf, self.cls_names)
-        return vis_res
+        return vis_res, class_scores
 
 
 def image_demo(predictor, vis_folder, path, current_time, save_result):
@@ -190,9 +198,17 @@ def image_demo(predictor, vis_folder, path, current_time, save_result):
     else:
         files = [path]
     files.sort()
+    start_time = time.time()
+    total_images = 0
+    combined_scores = {}
     for image_name in files:
         outputs, img_info = predictor.inference(image_name)
-        result_image = predictor.visual(outputs[0], img_info, predictor.confthre)
+        result_image, class_scores = predictor.visual(outputs[0], img_info, predictor.confthre)
+        for class_name, score in class_scores.items():
+            if class_name in combined_scores:
+                combined_scores[class_name].append(score)
+            else:
+                combined_scores[class_name] = [score]
         if save_result:
             save_folder = os.path.join(
                 vis_folder, time.strftime("%Y_%m_%d_%H_%M_%S", current_time)
@@ -201,10 +217,23 @@ def image_demo(predictor, vis_folder, path, current_time, save_result):
             save_file_name = os.path.join(save_folder, os.path.basename(image_name))
             logger.info("Saving detection result in {}".format(save_file_name))
             cv2.imwrite(save_file_name, result_image)
-        ch = cv2.waitKey(0)
-        if ch == 27 or ch == ord("q") or ch == ord("Q"):
-            break
-
+        #ch = cv2.waitKey(0)
+        #if ch == 27 or ch == ord("q") or ch == ord("Q"):
+        #    break
+        total_images += 1
+        
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    fps = total_images / elapsed_time
+    
+    average_scores = {
+        class_name: sum(scores) / len(scores) for class_name, scores in combined_scores.items()
+    }    
+    for class_name in sorted(average_scores.keys()):
+        avg_score = average_scores[class_name]
+        #print(f"{class_name}: {avg_score*100:.2f}%") 
+    print(f"Processed {total_images} images in {elapsed_time:.2f} seconds.")
+    print(f"FPS: {fps:.2f}")
 
 def imageflow_demo(predictor, vis_folder, current_time, args):
     cap = cv2.VideoCapture(args.path if args.demo == "video" else args.camid)

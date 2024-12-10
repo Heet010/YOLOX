@@ -6,9 +6,9 @@ import argparse
 import os
 import time
 from loguru import logger
-
+import json
 import cv2
-
+from collections import defaultdict
 import torch
 
 from yolox.data.data_augment import ValTransform
@@ -169,46 +169,96 @@ class Predictor(object):
         ratio = img_info["ratio"]
         img = img_info["raw_img"]
         if output is None:
-            return img
+            return img, {}
         output = output.cpu()
 
         bboxes = output[:, 0:4]
 
-        # preprocessing: resize
         bboxes /= ratio
 
         cls = output[:, 6]
         scores = output[:, 4] * output[:, 5]
-        # Convert tensors to lists for iteration
         cls_list = cls.tolist()
         scores_list = scores.tolist()
+        #print(cls_list)
 
-        # Create a dictionary mapping class names to scores
-        class_scores = {
-            COCO_CLASSES[int(cls_index)]: score 
-            for cls_index, score in zip(cls_list, scores_list)
-        }
+        class_scores = {}
+        for cls_index, score in zip(cls_list, scores_list):
+            class_name = COCO_CLASSES[int(cls_index)]
+            if class_name not in class_scores:
+                class_scores[class_name] = []  
+            class_scores[class_name].append(score)  
         vis_res = vis(img, bboxes, scores, cls, cls_conf, self.cls_names)
+        #print(class_scores)
         return vis_res, class_scores
 
+def save_coco_annotations(predictions, coco_output_file):
+    """
+    Save only the annotations part of the COCO format to a JSON file.
+    """
+    annotations = []
+    annotation_id = 1
+    category_map = {name: idx + 1 for idx, name in enumerate(COCO_CLASSES)}
 
+    for image_name, result in predictions.items():
+        # Collect bounding boxes, labels, and scores for annotations
+        for bbox, score, cls_index in zip(result["bboxes"], result["scores"], result["labels"]):
+            annotation_info = {
+                #"id": annotation_id,
+                "image_id": int(image_name[48:53]),  # Assuming you use image name as the image_id
+                "category_id": category_map[COCO_CLASSES[int(cls_index)]],
+                "bbox": [round(coord, 2) for coord in bbox] if isinstance(bbox, list) else [round(coord, 2) for coord in bbox.tolist()],
+                "score": int(round(score, 4)),
+                #"area": round(bbox[2] * bbox[3], 2),  # width * height
+                #"iscrowd": 0,
+            }
+            annotations.append(annotation_info)
+            annotation_id += 1
+
+    # Save only the annotations to a JSON file
+    annotations_data = {"annotations": annotations}
+
+    with open(coco_output_file, 'w') as f:
+        json.dump(annotations_data, f, indent=4)
+        
 def image_demo(predictor, vis_folder, path, current_time, save_result):
     if os.path.isdir(path):
         files = get_image_list(path)
     else:
         files = [path]
     files.sort()
+    
+    predictions = defaultdict(lambda: {"bboxes": [], "scores": [], "labels": []})
+    
     start_time = time.time()
     total_images = 0
     combined_scores = {}
     for image_name in files:
         outputs, img_info = predictor.inference(image_name)
+        if outputs[0] is None:
+            continue
         result_image, class_scores = predictor.visual(outputs[0], img_info, predictor.confthre)
+        
+        # Collect bounding boxes, scores, and labels for annotations
+        bboxes = outputs[0][:, 0:4]
+        scores = outputs[0][:, 4] * outputs[0][:, 5]
+        labels = outputs[0][:, 6]
+
+        predictions[image_name]["bboxes"].extend(bboxes.tolist())
+        predictions[image_name]["scores"].extend(scores.tolist())
+        predictions[image_name]["labels"].extend(labels.tolist())
+        
         for class_name, score in class_scores.items():
             if class_name in combined_scores:
-                combined_scores[class_name].append(score)
+                # Extend the existing list with the new scores, rounded to 4 decimal places
+                combined_scores[class_name].extend(
+                    [round(s, 4) for s in (score if isinstance(score, list) else [score])]
+                )
             else:
-                combined_scores[class_name] = [score]
+                # Initialize with a flattened list, rounded to 4 decimal places
+                combined_scores[class_name] = [
+                    round(s, 4) for s in (score if isinstance(score, list) else [score])
+                ]
         if save_result:
             save_folder = os.path.join(
                 vis_folder, time.strftime("%Y_%m_%d_%H_%M_%S", current_time)
@@ -221,17 +271,27 @@ def image_demo(predictor, vis_folder, path, current_time, save_result):
         #if ch == 27 or ch == ord("q") or ch == ord("Q"):
         #    break
         total_images += 1
-        
+    
+    
     end_time = time.time()
     elapsed_time = end_time - start_time
     fps = total_images / elapsed_time
     
+    save_json_file = r'C:\Users\bhalani\Desktop\result\annotations.json'
+    save_coco_annotations(predictions, save_json_file)
+    
+    print(combined_scores)
+    length_scores = {
+        class_name: len(scores) for class_name, scores in combined_scores.items()
+    }
     average_scores = {
         class_name: sum(scores) / len(scores) for class_name, scores in combined_scores.items()
     }    
     for class_name in sorted(average_scores.keys()):
+        len_scores = length_scores[class_name]
         avg_score = average_scores[class_name]
-        #print(f"{class_name}: {avg_score*100:.2f}%") 
+        #print(f"{len_scores}")
+        print(f"{class_name}: {avg_score*100:.2f}% : {len_scores}") 
     print(f"Processed {total_images} images in {elapsed_time:.2f} seconds.")
     print(f"FPS: {fps:.2f}")
 

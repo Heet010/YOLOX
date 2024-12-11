@@ -13,6 +13,7 @@ import torch
 
 from yolox.data.data_augment import ValTransform
 from yolox.data.datasets import COCO_CLASSES
+from yolox.data.datasets import COCO_CLASSES1
 from yolox.exp import get_exp
 from yolox.utils import fuse_model, get_model_info, postprocess, vis
 
@@ -175,7 +176,7 @@ class Predictor(object):
         bboxes = output[:, 0:4]
 
         bboxes /= ratio
-
+        #print(bboxes)
         cls = output[:, 6]
         scores = output[:, 4] * output[:, 5]
         cls_list = cls.tolist()
@@ -203,12 +204,20 @@ def save_coco_annotations(predictions, coco_output_file):
     for image_name, result in predictions.items():
         # Collect bounding boxes, labels, and scores for annotations
         for bbox, score, cls_index in zip(result["bboxes"], result["scores"], result["labels"]):
+            class1 = COCO_CLASSES[int(cls_index)]
+            for key, value in COCO_CLASSES1.items():
+                if key == class1:
+                    id = value
+            x1, y1, x2, y2 = bbox if isinstance(bbox, list) else bbox.tolist()
+            width = x2 - x1
+            height = y2 - y1
             annotation_info = {
                 #"id": annotation_id,
                 "image_id": int(image_name[48:53]),  # Assuming you use image name as the image_id
-                "category_id": category_map[COCO_CLASSES[int(cls_index)]],
-                "bbox": [round(coord, 2) for coord in bbox] if isinstance(bbox, list) else [round(coord, 2) for coord in bbox.tolist()],
-                "score": int(round(score, 4)),
+                #"category_id": category_map[COCO_CLASSES[int(cls_index)]],
+                "category_id": int(id),
+                "bbox": [round(x1, 2), round(y1, 2), round(width, 2), round(height, 2)],
+                "score": round(score, 4),
                 #"area": round(bbox[2] * bbox[3], 2),  # width * height
                 #"iscrowd": 0,
             }

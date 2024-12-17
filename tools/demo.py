@@ -225,7 +225,7 @@ def save_coco_annotations(predictions, coco_output_file):
             annotation_id += 1
 
     # Save only the annotations to a JSON file
-    annotations_data = {"annotations": annotations}
+    annotations_data = annotations
 
     with open(coco_output_file, 'w') as f:
         json.dump(annotations_data, f, indent=4)
